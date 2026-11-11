@@ -49,4 +49,4 @@ The recorder keeps the first 10,000 records by default, including markers. Set `
 
 ## Software verification
 
-GitHub Actions runs the offline tests, compiles both the ESPHome Device Builder example and the standalone ESP32-C3 firmware, and runs `tests/ha_smoke.py` against Home Assistant 2026.10.0 and an isolated Mosquitto listener. The smoke test uses synthetic MQTT frames and loopback TCP. The bench procedure covers gateway TLS and physical CAN behavior.
+GitHub Actions runs the offline tests, compiles both the ESPHome Device Builder example and the standalone ESP32-C3 firmware, and runs `tests/ha_smoke.py` against Home Assistant 2026.10.0 and 2026.11.1 with an isolated Mosquitto listener. The smoke test uses synthetic MQTT frames and loopback TCP. The bench procedure covers gateway TLS and physical CAN behavior.

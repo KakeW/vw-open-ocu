@@ -26,6 +26,13 @@ jobs:
           idf.py build
   home-assistant:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - home_assistant: '2026.10.0'
+            supervisor: '0.6.0'
+          - home_assistant: '2026.11.1'
+            supervisor: '0.8.1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,7 +42,7 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/ocu-ha"
           "$RUNNER_TEMP/ocu-ha/bin/python" -m pip install \
-            homeassistant==2026.10.0 paho-mqtt==2.1.0 aiohasupervisor==0.6.0
+            homeassistant==${{ matrix.home_assistant }} paho-mqtt==2.1.0 aiohasupervisor==${{ matrix.supervisor }}
       - name: Run Home Assistant against a loopback MQTT broker
         run: |
           printf 'listener 1883\nallow_anonymous true\n' > "$RUNNER_TEMP/ocu-mosquitto.conf"
