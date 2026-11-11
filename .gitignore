@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+.pytest_cache/
+build/
+sdkconfig
+sdkconfig.old
+gateway_config.h
+captures/
+.env
+.DS_Store

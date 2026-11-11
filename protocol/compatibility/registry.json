@@ -1,0 +1,10 @@
+[
+  {
+    "type": "EXT",
+    "can_id": "0x17332510",
+    "observation": "Battery Control FSG responses, including charging and climate status candidates",
+    "status": "CANDIDATE",
+    "vehicle": "e-Golf",
+    "source": "https://github.com/karlsen-technologies/smartkar-cano-new/blob/2b191b8e9066d494125b3c0338787a347ec8d205/docs/canbus-reverse-engineering/OCU_FEATURES.md"
+  }
+]
