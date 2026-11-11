@@ -57,7 +57,8 @@ jobs:
           mkdir "$RUNNER_TEMP/ocu-builder"
           cp -R components "$RUNNER_TEMP/ocu-builder/components"
           cp firmware/esphome/vw-open-ocu.yaml "$RUNNER_TEMP/ocu-builder/"
-          sed 's/replace-with-a-unique-32-byte-base64-key/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=/' \
+          test_key=$(openssl rand -base64 32)
+          sed "s|replace-with-a-unique-32-byte-base64-key|$test_key|" \
             firmware/esphome/secrets.example.yaml > "$RUNNER_TEMP/ocu-builder/secrets.yaml"
       - name: Compile the ESP32-C3 ESPHome image
         run: esphome compile "$RUNNER_TEMP/ocu-builder/vw-open-ocu.yaml"
