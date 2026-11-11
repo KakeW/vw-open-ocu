@@ -24,6 +24,14 @@ class CaptureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 list(read_candump(StringIO(line)))
 
+    def test_gvret_import_uses_explicit_time_unit_and_actual_dlc(self):
+        log = ("Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8\n"
+               "24,00000123,true,Rx,0,2,BA,AD,00,00,00,00,00,00,\n")
+        with self.assertRaises(ValueError):
+            list(read_csv(StringIO(log)))
+        self.assertEqual(list(read_csv(StringIO(log), "ms")),
+                         [Frame(24000, 0x123, True, bytes.fromhex("BAAD"))])
+
     def test_comparison(self):
         frames = [frame for frame in load(Path("examples/synthetic.csv")) if isinstance(frame, Frame)]
         baseline = summarize(frames[:1])

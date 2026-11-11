@@ -7,3 +7,5 @@ The [MY2018 e-Golf reference](https://github.com/thomasakarlsen/e-golf-comfort-c
 Both repositories were accessible. The primary revision contains no license file and the SmartKar README explicitly withholds public-use licensing. This project references their observations and uses original synthetic fixtures.
 
 The [registry](../protocol/compatibility/registry.json) records CANDIDATE for published e-Golf observations, CONFIRMED for independently verified Passat evidence, and UNKNOWN for observed but undecoded identifiers. Promote only with a repeatable capture and a documented validation method.
+
+To compare a local copy of an e-Golf reference trace, pass it to the analyzer as the baseline and the Passat capture as `--compare`. For GVRET CSV, supply `--gvret-time-unit us` or `ms` based on the recorder's configuration. The published e-Golf CSV header omits the unit, so confirm it before interpreting timing statistics. The importer uses `LEN` to trim placeholder bytes and preserves the extended flag.

@@ -14,9 +14,9 @@ from custom_components.vw_open_ocu.capture import (
 from custom_components.vw_open_ocu.frames import Frame, label
 
 
-def load(path: Path) -> list[Record]:
+def load(path: Path, gvret_time_unit: str | None = None) -> list[Record]:
     with path.open(newline="", encoding="utf-8-sig") as source:
-        return list(read_csv(source) if path.suffix.lower() == ".csv" else read_candump(source))
+        return list(read_csv(source, gvret_time_unit) if path.suffix.lower() == ".csv" else read_candump(source))
 
 
 def summarize(frames: Iterable[Frame]) -> dict:
@@ -60,6 +60,8 @@ def main() -> None:
     parser.add_argument("--id", action="append", default=[], help="Filter by STD:123 or EXT:00000123")
     parser.add_argument("--bap-id", action="append", type=lambda value: int(value, 16), default=[])
     parser.add_argument("--event-window-us", type=int)
+    parser.add_argument("--gvret-time-unit", choices=["us", "ms"],
+                        help="Explicit timestamp unit for GVRET CSV inputs")
     parser.add_argument("--export", type=Path)
     args = parser.parse_args()
     if args.event_window_us is not None and args.event_window_us < 0:
@@ -70,13 +72,13 @@ def main() -> None:
                 or not args.id or label(record.key) in args.id]
 
     try:
-        records = selected(load(args.capture))
+        records = selected(load(args.capture, args.gvret_time_unit))
         frames = [record for record in records if isinstance(record, Frame)]
         summary = summarize(frames)
         result: dict = {"ids": summary}
         if args.compare:
             result["comparison"] = compare(summary, summarize(
-                record for record in selected(load(args.compare)) if isinstance(record, Frame)
+                record for record in selected(load(args.compare, args.gvret_time_unit)) if isinstance(record, Frame)
             ))
         if args.event_window_us is not None:
             result["events"] = [
