@@ -44,3 +44,20 @@ jobs:
             eclipse-mosquitto:2@sha256:75d6662dee52c947dc9dd9c29f1d8d7ffef78ddaf38001caa09755681e8bbc98)
           trap 'docker stop "$broker_id" >/dev/null' EXIT
           PYTHONPATH=. "$RUNNER_TEMP/ocu-ha/bin/python" tests/ha_smoke.py 31883
+  esphome:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install esphome==2026.9.1
+      - name: Stage the Device Builder example with synthetic secrets
+        run: |
+          mkdir "$RUNNER_TEMP/ocu-builder"
+          cp -R components "$RUNNER_TEMP/ocu-builder/components"
+          cp firmware/esphome/vw-open-ocu.yaml "$RUNNER_TEMP/ocu-builder/"
+          sed 's/replace-with-a-unique-32-byte-base64-key/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=/' \
+            firmware/esphome/secrets.example.yaml > "$RUNNER_TEMP/ocu-builder/secrets.yaml"
+      - name: Compile the ESP32-C3 ESPHome image
+        run: esphome compile "$RUNNER_TEMP/ocu-builder/vw-open-ocu.yaml"

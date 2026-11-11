@@ -1,0 +1,62 @@
+substitutions:
+  name: vw-open-ocu
+  gateway_id: bench
+
+esphome:
+  name: ${name}
+  min_version: 2026.9.1
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+    version: 5.5.5
+
+# Device Builder: copy the repository's components/vw_open_ocu directory
+# to components/vw_open_ocu beside this device YAML. See docs/esphome.md.
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [vw_open_ocu]
+
+wifi:
+  ssid: !secret ocu_wifi_ssid
+  password: !secret ocu_wifi_password
+  reboot_timeout: 0s
+  # For a routed VPN, set use_address to the device's reserved IP or routed DNS name.
+  # use_address: 192.168.80.20
+
+logger:
+  level: INFO
+  baud_rate: 0
+
+api:
+  encryption:
+    key: !secret ocu_api_key
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    encryption:
+
+safe_mode:
+
+button:
+  - platform: safe_mode
+    name: Reboot into OTA safe mode
+
+time:
+  - platform: sntp
+    # servers: [ntp.example.net]
+
+vw_open_ocu:
+  gateway_id: ${gateway_id}
+  rx_pin: GPIO1
+  unused_tx_pin: GPIO0  # Leave physically disconnected from the transceiver.
+  broker_uri: !secret ocu_mqtt_uri
+  username: !secret ocu_mqtt_username
+  password: !secret ocu_mqtt_password
+  # ca_certificate: !secret ocu_mqtt_ca_certificate
+  capture_mode: false
+  allowlist: []

@@ -1,6 +1,6 @@
 # Hardware and safety
 
-The initial target from the project brief is a Nologo ESP32-C3 SuperMini with a 3.3 V SN65HVD230 board. The proposed wiring is transceiver TXD to GPIO0, RXD to GPIO1, and 500 kbit/s Classic CAN. Confirm board pin labels and electrical levels against the exact hardware. The first bench run should leave the transceiver TXD physically disconnected from GPIO0 and hold TXD at its verified recessive level. Use a separate transmitting and acknowledging node or a bench generator configured for silent listeners.
+The initial target from the project brief is a Nologo ESP32-C3 SuperMini with a 3.3 V SN65HVD230 board. Connect transceiver RXD to GPIO1 for 500 kbit/s Classic CAN. Confirm board pin labels and electrical levels against the exact hardware. Leave the transceiver TXD physically disconnected from the ESP32 and hold TXD at its verified recessive level. In the ESPHome configuration GPIO0 is an unconnected driver placeholder, set to input before TWAI starts. Use a separate transmitting and acknowledging node or a bench generator configured for silent listeners.
 
 ## Passat GTE MY2018 convenience CAN access
 

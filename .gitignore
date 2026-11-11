@@ -8,3 +8,5 @@ gateway_config.h
 captures/
 .env
 .DS_Store
+.esphome/
+secrets.yaml

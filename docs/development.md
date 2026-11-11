@@ -12,7 +12,11 @@ python3 -m tools.can_analyzer captures/baseline.csv --compare captures/action.lo
 
 Inputs are Classic CAN CSV and compact timestamped, single-interface candump logs. Use `--id STD:123` or `--id EXT:00000123` to filter. The reported frequency uses count minus one divided by the span from first to last frame for that identifier. `--export` uses CSV for a `.csv` destination and candump otherwise. CSV preserves event markers and sequence numbers. Candump preserves CAN ID type and frame data but omits capture markers and sequence numbers.
 
-## Configure and build the gateway
+## Configure the ESPHome gateway
+
+Use the [ESPHome Device Builder guide](esphome.md) for new installations, development and OTA. Start with the isolated bench hardware and a known CAN source.
+
+## Standalone ESP-IDF reference build
 
 1. Use the bench setup in [Hardware and safety](hardware.md), with GPIO0 physically disconnected from the transceiver input and that input held recessive. Do not connect the bench unit to the vehicle.
 2. Configure an MQTT TLS listener and credentials. Restrict gateway writes to its two [topics](mqtt-protocol.md). Configure Home Assistant's MQTT integration on that broker with its own credentials and permission to read the gateway topics. Make an SNTP server available to the ESP32 and use a broker hostname that matches its TLS certificate.
@@ -45,4 +49,4 @@ The recorder keeps the first 10,000 records by default, including markers. Set `
 
 ## Software verification
 
-GitHub Actions runs the offline tests, compiles the firmware for ESP32-C3, and runs `tests/ha_smoke.py` against Home Assistant 2026.10.0 and an isolated Mosquitto listener. The smoke test uses synthetic MQTT frames and loopback TCP. The bench procedure covers gateway TLS and physical CAN behavior.
+GitHub Actions runs the offline tests, compiles both the ESPHome Device Builder example and the standalone ESP32-C3 firmware, and runs `tests/ha_smoke.py` against Home Assistant 2026.10.0 and an isolated Mosquitto listener. The smoke test uses synthetic MQTT frames and loopback TCP. The bench procedure covers gateway TLS and physical CAN behavior.

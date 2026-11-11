@@ -2,6 +2,8 @@
 
 Receive-only CAN telemetry and diagnostics for the Volkswagen Passat GTE MY2018. The MY2018 e-Golf is a protocol reference. Vehicle state requires validation on the Passat before it can appear in Home Assistant.
 
+- [ESPHome Device Builder setup](docs/esphome.md)
+- [Private source and remote OTA](docs/remote-ota.md)
 - [Architecture](docs/architecture.md)
 - [Bench and Home Assistant setup](docs/development.md)
 - [Passat preconditioning capture workflow](docs/vehicle-capture.md)
