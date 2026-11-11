@@ -24,3 +24,19 @@ jobs:
           cd firmware/esp32-c3
           idf.py set-target esp32c3
           idf.py build
+  home-assistant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install homeassistant==2026.10.0 paho-mqtt==2.1.0
+      - name: Run Home Assistant against a loopback MQTT broker
+        run: |
+          printf 'listener 1883\nallow_anonymous true\n' > "$RUNNER_TEMP/ocu-mosquitto.conf"
+          broker_id=$(docker run --detach --rm --publish 127.0.0.1:31883:1883 \
+            --volume "$RUNNER_TEMP/ocu-mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+            eclipse-mosquitto:2@sha256:75d6662dee52c947dc9dd9c29f1d8d7ffef78ddaf38001caa09755681e8bbc98)
+          trap 'docker stop "$broker_id" >/dev/null' EXIT
+          PYTHONPATH=. python tests/ha_smoke.py 31883

@@ -1,0 +1,37 @@
+capture_start:
+  name: Start capture
+  description: Start recording frames from a live gateway in capture mode.
+  fields:
+    gateway_id: &gateway
+      name: Gateway ID
+      required: true
+      selector:
+        text:
+capture_stop:
+  name: Stop capture
+  description: Stop recording and keep the capture in memory for export.
+  fields:
+    gateway_id: *gateway
+capture_mark:
+  name: Add capture marker
+  description: Mark the most recently observed CAN timestamp.
+  fields:
+    gateway_id: *gateway
+    name:
+      name: Event name
+      required: true
+      selector:
+        text:
+capture_export:
+  name: Export capture
+  description: Return the stopped capture in the action response.
+  fields:
+    gateway_id: *gateway
+    format:
+      name: Format
+      default: csv
+      selector:
+        select:
+          options:
+            - csv
+            - candump
