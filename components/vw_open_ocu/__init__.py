@@ -6,15 +6,26 @@ import re
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
-from esphome.components import esp32, socket
+from esphome.components import binary_sensor, esp32, sensor, socket, text_sensor
 from esphome.const import CONF_ID, CONF_PASSWORD, CONF_USERNAME
 from esphome.core import CORE
 
 DEPENDENCIES = ["esp32", "wifi", "ota", "time"]
-AUTO_LOAD = ["socket"]
+AUTO_LOAD = ["binary_sensor", "sensor", "socket", "text_sensor"]
 CONFLICTS_WITH = ["canbus"]
 
 Gateway = cg.esphome_ns.namespace("vw_open_ocu").class_("Gateway", cg.Component)
+
+DIAGNOSTICS = {
+    "wifi_ready": (binary_sensor.binary_sensor_schema, binary_sensor.new_binary_sensor),
+    "clock_ready": (binary_sensor.binary_sensor_schema, binary_sensor.new_binary_sensor),
+    "mqtt_connected": (binary_sensor.binary_sensor_schema, binary_sensor.new_binary_sensor),
+    "mqtt_state": (text_sensor.text_sensor_schema, text_sensor.new_text_sensor),
+    "last_mqtt_error": (text_sensor.text_sensor_schema, text_sensor.new_text_sensor),
+    "mqtt_attempts": (sensor.sensor_schema, sensor.new_sensor),
+    "heartbeat_count": (sensor.sensor_schema, sensor.new_sensor),
+    "heartbeat_failures": (sensor.sensor_schema, sensor.new_sensor),
+}
 
 
 def _broker_uri(value):
@@ -62,10 +73,14 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(Gateway),
             cv.Required("gateway_id"): _gateway_id,
-            cv.Required("broker_uri"): _broker_uri,
+            cv.Required("broker_uri"): cv.sensitive(_broker_uri),
             cv.Required(CONF_USERNAME): cv.sensitive(cv.string_strict),
             cv.Required(CONF_PASSWORD): cv.sensitive(cv.string_strict),
-            cv.Optional("ca_certificate"): cv.string_strict,
+            cv.Optional("ca_certificate"): cv.sensitive(cv.string_strict),
+            **{
+                cv.Optional(key): schema(entity_category="diagnostic")
+                for key, (schema, _) in DIAGNOSTICS.items()
+            },
             cv.Optional("rx_pin", default="GPIO1"): pins.internal_gpio_input_pin_number,
             cv.Optional("unused_tx_pin", default="GPIO0"): pins.internal_gpio_output_pin_number,
             cv.Optional("capture_mode", default=False): cv.boolean,
@@ -100,3 +115,7 @@ async def to_code(config):
     cg.add(var.set_capture_mode(config["capture_mode"]))
     for entry in config["allowlist"]:
         cg.add(var.add_filter(entry["can_id"], entry["extended"]))
+    for key, (_, factory) in DIAGNOSTICS.items():
+        if key in config:
+            entity = await factory(config[key])
+            cg.add(getattr(var, f"set_{key}")(entity))

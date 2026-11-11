@@ -13,10 +13,12 @@
 #include "esp_random.h"
 #include "esp_rom_gpio.h"
 #include "esp_timer.h"
+#include "esp_tls_errors.h"
 #include "esp_wifi.h"
 #include "freertos/task.h"
 #include "soc/gpio_sig_map.h"
 
+#include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
 namespace esphome::vw_open_ocu {
@@ -26,7 +28,8 @@ static constexpr unsigned QUEUE_DEPTH = 256;
 static constexpr unsigned BATCH_MAX = 48;
 static constexpr unsigned HEADER_SIZE = 12;
 static constexpr unsigned FRAME_MAX_SIZE = 29;
-static constexpr int64_t HEARTBEAT_US = 5000000;
+// Lower bound for an initialized wall clock. TLS still validates certificate dates.
+static constexpr std::time_t CLOCK_READY_EPOCH = 1704067200;
 static constexpr uint32_t EXTENDED_FLAG = 1UL << 31;
 static constexpr uint32_t REMOTE_FLAG = 1UL << 30;
 
@@ -103,6 +106,7 @@ void Gateway::setup() {
     this->fail_setup_("start MQTT worker task", ESP_ERR_NO_MEM);
   }
   ota::get_global_ota_callback()->add_global_state_listener(this);
+  this->set_interval(1000, [this]() { this->report_diagnostics_(); });
 }
 
 void Gateway::dump_config() {
@@ -112,6 +116,9 @@ void Gateway::dump_config() {
 
 void Gateway::fail_setup_(const char *operation, esp_err_t error) {
   ESP_LOGE(TAG, "Could not %s: %s", operation, esp_err_to_name(error));
+  this->mqtt_state_.store(MqttState::UNAVAILABLE);
+  this->record_error_({ErrorKind::SETUP, error});
+  this->report_diagnostics_();
   this->mark_failed();
 }
 
@@ -214,11 +221,168 @@ void Gateway::discard_queued_() {
   }
 }
 
+bool Gateway::LogGate::allows(uint32_t now, unsigned next, bool repeat) {
+  const uint32_t elapsed = now - this->at;
+  if (this->initialized && (elapsed < 5000 || (next == this->value && (!repeat || elapsed < 30000))))
+    return false;
+  this->at = now;
+  this->value = next;
+  this->initialized = true;
+  return true;
+}
+
+const char *Gateway::wifi_label_(WifiState state) {
+  switch (state) {
+    case WifiState::NO_STATION: return "Station interface unavailable";
+    case WifiState::INTERFACE_DOWN: return "Station interface down";
+    case WifiState::NO_IPV4: return "Waiting for station IPv4 address";
+    case WifiState::READY: return "Station IPv4 ready";
+  }
+  return "Unknown";
+}
+
+const char *Gateway::mqtt_label_(MqttState state) {
+  switch (state) {
+    case MqttState::INITIALIZING: return "Initializing";
+    case MqttState::WAITING_WIFI: return "Waiting for Wi-Fi IPv4";
+    case MqttState::WAITING_TIME: return "Waiting for valid system time";
+    case MqttState::STARTING: return "Starting MQTT client";
+    case MqttState::CONNECTING: return "Connecting or reconnecting";
+    case MqttState::CONNECTED: return "Connected";
+    case MqttState::RETRYING: return "Retrying MQTT client";
+    case MqttState::PAUSED: return "Paused for OTA or shutdown";
+    case MqttState::UNAVAILABLE: return "Gateway setup failed";
+  }
+  return "Unknown";
+}
+
+void Gateway::format_error_(const MqttError &error, char *text, size_t size) {
+  const char *label = "Unknown MQTT error";
+  switch (error.kind) {
+    case ErrorKind::NONE:
+      std::snprintf(text, size, "None");
+      return;
+    case ErrorKind::TLS:
+    case ErrorKind::TRANSPORT:
+      std::snprintf(text, size, "%s (esp=0x%x stack=%d verify=0x%x errno=%d)",
+                    error.kind == ErrorKind::TLS ? "TLS error" : "TCP transport error",
+                    static_cast<unsigned>(error.code), error.tls_stack, error.verify_flags, error.socket_errno);
+      return;
+    case ErrorKind::SETUP: label = "Gateway setup failed"; break;
+    case ErrorKind::INIT: label = "MQTT client initialization failed"; break;
+    case ErrorKind::EVENT_REGISTRATION: label = "MQTT event registration failed"; break;
+    case ErrorKind::START: label = "MQTT client start failed"; break;
+    case ErrorKind::STOP: label = "MQTT client stop failed"; break;
+    case ErrorKind::AUTH: label = "MQTT authentication or authorization refused"; break;
+    case ErrorKind::REFUSED: label = "MQTT broker refused connection"; break;
+    case ErrorKind::UNKNOWN_MQTT: break;
+    case ErrorKind::CONTROLLER: label = "Heartbeat TWAI status read failed"; break;
+    case ErrorKind::HEARTBEAT_ENCODING: label = "Heartbeat encoding failed"; break;
+    case ErrorKind::HEARTBEAT_PUBLISH: label = "Heartbeat local publish failed"; break;
+  }
+  std::snprintf(text, size, "%s (code=%d)", label, error.code);
+}
+
+void Gateway::record_error_(MqttError error) {
+  portENTER_CRITICAL(&this->error_lock_);
+  error.serial = this->last_error_.serial + 1;
+  this->last_error_ = error;
+  portEXIT_CRITICAL(&this->error_lock_);
+}
+
+void Gateway::report_diagnostics_() {
+  const auto wifi = this->wifi_state_.load();
+  const auto state = this->mqtt_state_.load();
+  const bool clock = this->clock_ready_.load();
+  const bool connected = state == MqttState::CONNECTED && this->mqtt_ready_.load() && !this->paused_.load();
+  const unsigned starts = this->starts_.load();
+  const unsigned attempts = this->attempts_.load();
+  const unsigned connects = this->connects_.load();
+  const unsigned disconnects = this->disconnects_.load();
+  const unsigned heartbeats = this->heartbeat_count_.load();
+  const unsigned failures = this->heartbeat_failures_.load();
+  portENTER_CRITICAL(&this->error_lock_);
+  const MqttError error = this->last_error_;
+  portEXIT_CRITICAL(&this->error_lock_);
+  char error_text[128];
+  format_error_(error, error_text, sizeof(error_text));
+
+  const auto publish = [](auto *entity, auto value) {
+    if (entity != nullptr && (!entity->has_state() || entity->state != value))
+      entity->publish_state(value);
+  };
+  publish(this->wifi_sensor_, wifi == WifiState::READY);
+  publish(this->clock_sensor_, clock);
+  publish(this->mqtt_sensor_, connected);
+  publish(this->state_sensor_, mqtt_label_(state));
+  publish(this->error_sensor_, static_cast<const char *>(error_text));
+  publish(this->attempt_sensor_, static_cast<float>(attempts));
+  publish(this->heartbeat_sensor_, static_cast<float>(heartbeats));
+  publish(this->heartbeat_failure_sensor_, static_cast<float>(failures));
+
+  const uint32_t now = millis();
+  if (this->wifi_log_.allows(now, static_cast<unsigned>(wifi), state == MqttState::WAITING_WIFI))
+    ESP_LOGI(TAG, "Wi-Fi: %s", wifi_label_(wifi));
+  if (this->clock_log_.allows(now, clock, state == MqttState::WAITING_TIME))
+    ESP_LOGI(TAG, "Clock: %s", clock ? "valid for TLS startup" : "waiting for valid time (check SNTP or other time source)");
+  if (this->mqtt_log_.allows(now, static_cast<unsigned>(state)))
+    ESP_LOGI(TAG, "MQTT: %s", mqtt_label_(state));
+  if (starts != 0 && this->event_log_.allows(now, starts + attempts + connects + disconnects))
+    ESP_LOGI(TAG, "MQTT events: client starts=%u attempts=%u connected=%u disconnected=%u", starts, attempts,
+             connects, disconnects);
+  if (error.serial != 0 && this->error_log_.allows(now, error.serial))
+    ESP_LOGW(TAG, "%s", error_text);
+  if (failures != 0 && this->heartbeat_log_.allows(now, failures))
+    ESP_LOGW(TAG, "Heartbeat local results: sent=%u failed=%u", heartbeats, failures);
+}
+
+void Gateway::mqtt_event_(int32_t event, const esp_mqtt_event_t *data) {
+  switch (event) {
+    case MQTT_EVENT_BEFORE_CONNECT:
+      this->attempts_.fetch_add(1);
+      break;
+    case MQTT_EVENT_CONNECTED:
+      this->epoch_.fetch_add(1);
+      this->mqtt_ready_.store(true);
+      this->connects_.fetch_add(1);
+      break;
+    case MQTT_EVENT_DISCONNECTED:
+      this->mqtt_ready_.store(false);
+      this->epoch_.fetch_add(1);
+      this->disconnects_.fetch_add(1);
+      break;
+    case MQTT_EVENT_ERROR: {
+      const auto *error = data == nullptr ? nullptr : data->error_handle;
+      if (error == nullptr) {
+        this->record_error_({ErrorKind::UNKNOWN_MQTT});
+      } else if (error->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+        const auto code = error->connect_return_code;
+        const bool auth = code == MQTT_CONNECTION_REFUSE_BAD_USERNAME || code == MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+        this->record_error_({auth ? ErrorKind::AUTH : ErrorKind::REFUSED, code});
+      } else if (error->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+        const auto code = error->esp_tls_last_esp_err;
+        const bool tls = error->esp_tls_cert_verify_flags != 0 || error->esp_tls_stack_err != 0 ||
+                         (code >= ESP_ERR_MBEDTLS_CERT_PARTLY_OK && code <= ESP_ERR_MBEDTLS_SSL_READ_FAILED) ||
+                         code == ESP_ERR_ESP_TLS_SERVER_HANDSHAKE_TIMEOUT;
+        this->record_error_({tls ? ErrorKind::TLS : ErrorKind::TRANSPORT, error->esp_tls_last_esp_err,
+                             error->esp_tls_stack_err, static_cast<unsigned>(error->esp_tls_cert_verify_flags),
+                             error->esp_transport_sock_errno});
+      } else {
+        this->record_error_({ErrorKind::UNKNOWN_MQTT, error->error_type});
+      }
+      break;
+    }
+    default: break;
+  }
+}
+
 bool Gateway::heartbeat_(esp_mqtt_client_handle_t client, uint64_t session, unsigned epoch,
                          const uint64_t *last_published) {
   twai_status_info_t info{};
-  if (twai_get_status_info(&info) != ESP_OK)
+  if (const auto result = twai_get_status_info(&info); result != ESP_OK) {
+    this->record_error_({ErrorKind::CONTROLLER, result});
     return false;
+  }
   char payload[512];
   char published[21] = "null";
   if (last_published != nullptr)
@@ -236,9 +400,16 @@ bool Gateway::heartbeat_(esp_mqtt_client_handle_t client, uint64_t session, unsi
       this->dropped_queue_.load(), this->dropped_transport_.load(), this->filtered_.load(),
       this->unsupported_dlc_.load(), info.rx_missed_count, info.rx_overrun_count, info.bus_error_count,
       info.rx_error_counter, static_cast<int>(info.state));
-  return length > 0 && static_cast<size_t>(length) < sizeof(payload) && !this->paused_.load() &&
-         epoch == this->epoch_.load() &&
-         esp_mqtt_client_publish(client, this->status_topic_.c_str(), payload, length, 0, 0) >= 0;
+  if (length <= 0 || static_cast<size_t>(length) >= sizeof(payload)) {
+    this->record_error_({ErrorKind::HEARTBEAT_ENCODING, length});
+    return false;
+  }
+  if (this->paused_.load() || !this->mqtt_ready_.load() || epoch != this->epoch_.load())
+    return false;
+  const int result = esp_mqtt_client_publish(client, this->status_topic_.c_str(), payload, length, 0, 0);
+  if (result < 0)
+    this->record_error_({ErrorKind::HEARTBEAT_PUBLISH, result});
+  return result >= 0;
 }
 
 void Gateway::publish_() {
@@ -252,93 +423,106 @@ void Gateway::publish_() {
   config.credentials.client_id = this->client_id_.c_str();
   config.network.timeout_ms = 2000;
   config.task.priority = 4;
-  auto client = esp_mqtt_client_init(&config);
-  if (client == nullptr) {
-    ESP_LOGE(TAG, "Could not create MQTT transport; OTA remains available");
-    this->set_paused_(true);
-    vTaskDelete(nullptr);
-    return;
-  }
-  const auto result = esp_mqtt_client_register_event(
-      client, MQTT_EVENT_ANY,
-      [](void *context, esp_event_base_t, int32_t event, void *) {
-        auto *gateway = static_cast<Gateway *>(context);
-        if (event == MQTT_EVENT_CONNECTED) {
-          gateway->epoch_.fetch_add(1);
-          gateway->mqtt_ready_.store(true);
-        } else if (event == MQTT_EVENT_DISCONNECTED) {
-          gateway->mqtt_ready_.store(false);
-          gateway->epoch_.fetch_add(1);
-        }
-      },
-      this);
-  if (result != ESP_OK) {
-    ESP_LOGE(TAG, "Could not register MQTT events: %s", esp_err_to_name(result));
-    esp_mqtt_client_destroy(client);
-    this->set_paused_(true);
-    vTaskDelete(nullptr);
-    return;
-  }
+  esp_mqtt_client_handle_t client = nullptr;
+  const auto start_client = [this, &config, &client]() {
+    if (client == nullptr) {
+      client = esp_mqtt_client_init(&config);
+      if (client == nullptr) {
+        this->record_error_({ErrorKind::INIT});
+        return false;
+      }
+      const auto result = esp_mqtt_client_register_event(
+          client, MQTT_EVENT_ANY,
+          [](void *context, esp_event_base_t, int32_t event, void *data) {
+            static_cast<Gateway *>(context)->mqtt_event_(event, static_cast<const esp_mqtt_event_t *>(data));
+          },
+          this);
+      if (result != ESP_OK) {
+        this->record_error_({ErrorKind::EVENT_REGISTRATION, result});
+        esp_mqtt_client_destroy(client);
+        client = nullptr;
+        return false;
+      }
+    }
+    const auto result = esp_mqtt_client_start(client);
+    if (result != ESP_OK)
+      this->record_error_({ErrorKind::START, result});
+    return result == ESP_OK;
+  };
 
+  MqttLifecycle lifecycle;
   uint8_t batch[HEADER_SIZE + BATCH_MAX * FRAME_MAX_SIZE] = {'O', 'C', 'U', 1};
   uint64_t session = 0;
   bool session_created = false;
-  bool started = false;
-  unsigned wifi_generation = this->wifi_generation_.load();
-  unsigned epoch = this->epoch_.load();
-  int64_t next_heartbeat = 0;
   uint64_t last_published = 0;
   bool published_frames = false;
   for (;;) {
-    const unsigned current_wifi = this->wifi_generation_.load();
+    const unsigned wifi_generation = this->wifi_generation_.load();
     auto *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t ip{};
-    const bool wifi_ready = netif != nullptr && esp_netif_is_netif_up(netif) &&
-                            esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0;
-    if (this->paused_.load() || !wifi_ready || current_wifi != wifi_generation) {
-      if (started) {
-        esp_mqtt_client_stop(client);
-        this->mqtt_ready_.store(false);
-        started = false;
-      }
-      wifi_generation = current_wifi;
-      this->discard_queued_();
-      vTaskDelay(pdMS_TO_TICKS(40));
-      continue;
+    WifiState wifi = WifiState::NO_STATION;
+    if (netif != nullptr) {
+      wifi = !esp_netif_is_netif_up(netif) ? WifiState::INTERFACE_DOWN
+             : esp_netif_get_ip_info(netif, &ip) != ESP_OK || ip.ip.addr == 0 ? WifiState::NO_IPV4
+                                                                            : WifiState::READY;
     }
-    if (!started) {
-      // Wait for ESPHome's time source before verifying TLS certificates.
-      if (std::time(nullptr) < 1704067200 || esp_mqtt_client_start(client) != ESP_OK) {
-        this->discard_queued_();
-        vTaskDelay(pdMS_TO_TICKS(200));
-        continue;
-      }
-      started = true;
-      if (!session_created) {
-        session = (static_cast<uint64_t>(esp_random()) << 32) | esp_random();
-        put_be(batch + 4, session, 8);
-        session_created = true;
-      }
-    }
-    const bool mqtt_ready = this->mqtt_ready_.load();
-    const unsigned current_epoch = this->epoch_.load();
-    if (!mqtt_ready || current_epoch != epoch) {
+    const bool clock = std::time(nullptr) >= CLOCK_READY_EPOCH;
+    this->wifi_state_.store(wifi);
+    this->clock_ready_.store(clock);
+
+    const uint64_t now = esp_timer_get_time() / 1000;
+    const bool ready = this->mqtt_ready_.load();
+    const unsigned epoch = this->epoch_.load();
+    const auto decision = lifecycle.poll(
+        {now, wifi == WifiState::READY, clock, this->paused_.load(), ready, wifi_generation, epoch});
+    this->mqtt_state_.store(decision.state);
+    if (decision.discard_backlog)
       this->discard_queued_();
-      epoch = current_epoch;
-      next_heartbeat = 0;
-      if (!mqtt_ready) {
+
+    switch (decision.action) {
+      case MqttAction::WAIT:
         vTaskDelay(pdMS_TO_TICKS(40));
         continue;
-      }
-    }
-    const int64_t now = esp_timer_get_time();
-    if (now >= next_heartbeat) {
-      if (!this->heartbeat_(client, session, epoch, published_frames ? &last_published : nullptr)) {
-        this->discard_queued_();
-        vTaskDelay(pdMS_TO_TICKS(100));
+      case MqttAction::START: {
+        if (this->paused_.load() || wifi_generation != this->wifi_generation_.load())
+          continue;
+        const bool success = start_client();
+        lifecycle.started(esp_timer_get_time() / 1000, success);
+        if (success) {
+          this->starts_.fetch_add(1);
+          if (!session_created) {
+            session = (static_cast<uint64_t>(esp_random()) << 32) | esp_random();
+            put_be(batch + 4, session, 8);
+            session_created = true;
+          }
+        }
         continue;
       }
-      next_heartbeat = now + HEARTBEAT_US;
+      case MqttAction::STOP: {
+        const auto result = esp_mqtt_client_stop(client);
+        this->mqtt_ready_.store(false);
+        bool stopped = result == ESP_OK;
+        if (!stopped) {
+          this->record_error_({ErrorKind::STOP, result});
+          // From this worker, ESP_FAIL means ESP-MQTT was already stopped.
+          if (result == ESP_FAIL && esp_mqtt_client_destroy(client) == ESP_OK) {
+            client = nullptr;
+            stopped = true;
+          }
+        }
+        lifecycle.stopped(esp_timer_get_time() / 1000, stopped);
+        continue;
+      }
+      case MqttAction::HEARTBEAT: {
+        const bool success = this->heartbeat_(client, session, epoch, published_frames ? &last_published : nullptr);
+        if (success)
+          this->heartbeat_count_.fetch_add(1);
+        else if (!this->paused_.load() && epoch == this->epoch_.load())
+          this->heartbeat_failures_.fetch_add(1);
+        lifecycle.heartbeat(esp_timer_get_time() / 1000, success);
+        continue;
+      }
+      case MqttAction::FRAMES: break;
     }
 
     Frame frame;
@@ -354,7 +538,7 @@ void Gateway::publish_() {
       batch_last = frame.sequence;
       ++count;
     }
-    if (this->paused_.load() || epoch != this->epoch_.load() ||
+    if (this->paused_.load() || !this->mqtt_ready_.load() || epoch != this->epoch_.load() ||
         esp_mqtt_client_publish(client, this->frame_topic_.c_str(), reinterpret_cast<const char *>(batch),
                                 end - batch, 0, 0) < 0) {
       this->dropped_transport_.fetch_add(count);

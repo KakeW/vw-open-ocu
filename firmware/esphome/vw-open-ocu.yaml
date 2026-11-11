@@ -60,3 +60,19 @@ vw_open_ocu:
   # ca_certificate: !secret ocu_mqtt_ca_certificate
   capture_mode: false
   allowlist: []
+  wifi_ready:
+    name: Gateway Wi-Fi IPv4 Ready
+  clock_ready:
+    name: Gateway Clock Ready for TLS
+  mqtt_connected:
+    name: Gateway MQTT Connected
+  mqtt_state:
+    name: Gateway MQTT State
+  last_mqtt_error:
+    name: Gateway Last MQTT Error
+  mqtt_attempts:
+    name: Gateway MQTT Connection Attempts
+  heartbeat_count:
+    name: Gateway Heartbeats Sent
+  heartbeat_failures:
+    name: Gateway Heartbeat Failures

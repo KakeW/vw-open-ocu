@@ -5,12 +5,17 @@
 #include <string>
 #include <vector>
 
+#include "mqtt_lifecycle.h"
+
 #include "driver/twai.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "mqtt_client.h"
 
+#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/ota/ota_backend.h"
+#include "esphome/components/sensor/sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/core/component.h"
 
 namespace esphome::vw_open_ocu {
@@ -29,6 +34,14 @@ class Gateway final : public Component, public ota::OTAGlobalStateListener {
     this->unused_tx_pin_ = static_cast<gpio_num_t>(unused_tx);
   }
   void set_capture_mode(bool enabled) { this->capture_mode_ = enabled; }
+  void set_wifi_ready(binary_sensor::BinarySensor *entity) { this->wifi_sensor_ = entity; }
+  void set_clock_ready(binary_sensor::BinarySensor *entity) { this->clock_sensor_ = entity; }
+  void set_mqtt_connected(binary_sensor::BinarySensor *entity) { this->mqtt_sensor_ = entity; }
+  void set_mqtt_state(text_sensor::TextSensor *entity) { this->state_sensor_ = entity; }
+  void set_last_mqtt_error(text_sensor::TextSensor *entity) { this->error_sensor_ = entity; }
+  void set_mqtt_attempts(sensor::Sensor *entity) { this->attempt_sensor_ = entity; }
+  void set_heartbeat_count(sensor::Sensor *entity) { this->heartbeat_sensor_ = entity; }
+  void set_heartbeat_failures(sensor::Sensor *entity) { this->heartbeat_failure_sensor_ = entity; }
   void add_filter(uint32_t id, bool extended);
   void setup() override;
   void dump_config() override;
@@ -37,6 +50,25 @@ class Gateway final : public Component, public ota::OTAGlobalStateListener {
   void on_ota_global_state(ota::OTAState state, float progress, uint8_t error, ota::OTAComponent *component) override;
 
  private:
+  enum class WifiState : uint8_t { NO_STATION, INTERFACE_DOWN, NO_IPV4, READY };
+  enum class ErrorKind : uint8_t {
+    NONE, SETUP, INIT, EVENT_REGISTRATION, START, STOP, TRANSPORT, TLS, AUTH, REFUSED,
+    UNKNOWN_MQTT, CONTROLLER, HEARTBEAT_ENCODING, HEARTBEAT_PUBLISH,
+  };
+  struct MqttError {
+    ErrorKind kind{ErrorKind::NONE};
+    int code{0};
+    int tls_stack{0};
+    unsigned verify_flags{0};
+    int socket_errno{0};
+    unsigned serial{0};
+  };
+  struct LogGate {
+    uint32_t at{0};
+    unsigned value{0};
+    bool initialized{false};
+    bool allows(uint32_t now, unsigned next, bool repeat = false);
+  };
   struct Frame {
     uint64_t sequence;
     uint64_t timestamp_us;
@@ -49,6 +81,12 @@ class Gateway final : public Component, public ota::OTAGlobalStateListener {
   void receive_();
   void publish_();
   void discard_queued_();
+  void mqtt_event_(int32_t event, const esp_mqtt_event_t *data);
+  void record_error_(MqttError error);
+  void report_diagnostics_();
+  static const char *wifi_label_(WifiState state);
+  static const char *mqtt_label_(MqttState state);
+  static void format_error_(const MqttError &error, char *text, size_t size);
   bool heartbeat_(esp_mqtt_client_handle_t client, uint64_t session, unsigned epoch, const uint64_t *last_published);
   bool start_receiver_();
   void set_paused_(bool paused);
@@ -66,6 +104,18 @@ class Gateway final : public Component, public ota::OTAGlobalStateListener {
   std::atomic<bool> mqtt_ready_{false};
   std::atomic<unsigned> epoch_{0};
   std::atomic<unsigned> wifi_generation_{0};
+  std::atomic<WifiState> wifi_state_{WifiState::NO_STATION};
+  std::atomic<MqttState> mqtt_state_{MqttState::INITIALIZING};
+  std::atomic<bool> clock_ready_{false};
+  std::atomic<unsigned> starts_{0}, attempts_{0}, connects_{0}, disconnects_{0};
+  std::atomic<unsigned> heartbeat_count_{0}, heartbeat_failures_{0};
+  portMUX_TYPE error_lock_ = portMUX_INITIALIZER_UNLOCKED;
+  MqttError last_error_{};
+  LogGate wifi_log_, clock_log_, mqtt_log_, event_log_, error_log_, heartbeat_log_;
+
+  binary_sensor::BinarySensor *wifi_sensor_{nullptr}, *clock_sensor_{nullptr}, *mqtt_sensor_{nullptr};
+  text_sensor::TextSensor *state_sensor_{nullptr}, *error_sensor_{nullptr};
+  sensor::Sensor *attempt_sensor_{nullptr}, *heartbeat_sensor_{nullptr}, *heartbeat_failure_sensor_{nullptr};
   std::atomic<unsigned> dropped_queue_{0}, dropped_transport_{0}, filtered_{0}, unsupported_dlc_{0}, queue_peak_{0};
 };
 
