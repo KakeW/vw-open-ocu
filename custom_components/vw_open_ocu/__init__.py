@@ -11,6 +11,16 @@ DOMAIN = "vw_open_ocu"
 GATEWAY_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
 
 
+def _validate_config(config: dict) -> dict:
+    # Keep the offline CAN tools importable without Home Assistant installed.
+    from homeassistant.helpers import config_validation as cv
+
+    return cv.config_entry_only_config_schema(DOMAIN)(config)
+
+
+CONFIG_SCHEMA = _validate_config
+
+
 async def async_setup(hass: "HomeAssistant", config: dict) -> bool:
     from .services import register
 
