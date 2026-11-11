@@ -61,4 +61,16 @@ def decode_status(payload: bytes) -> dict:
         0 <= status["queue_peak"] <= status["queue_capacity"]
     ):
         raise ValueError("invalid heartbeat queue size")
-    return {key: status[key] for key in ("session", "capture_mode", *COUNTERS)}
+    result = {key: status[key] for key in ("session", "capture_mode", *COUNTERS)}
+    for key, maximum in (("connection_epoch", 0xFFFFFFFF),
+                         ("last_published_sequence", 0xFFFFFFFFFFFFFFFF)):
+        if key not in status:
+            continue
+        value = status[key]
+        if key == "last_published_sequence" and value is None:
+            result[key] = None
+        elif type(value) is int and 0 <= value <= maximum:
+            result[key] = value
+        else:
+            raise ValueError(f"invalid heartbeat field {key}")
+    return result

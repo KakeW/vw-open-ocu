@@ -63,7 +63,7 @@ async def run(port: int) -> None:
                     blocking=True, return_response=response,
                 )
 
-            await action("capture_start")
+            await action("capture_start", max_records=12)
             client.publish(f"{PREFIX}/frames", batch(frame(0), frame(2)), retain=False)
             await wait_until(lambda: len(gateway.records) == 2)
             await action("capture_mark", name="synthetic event")
@@ -72,6 +72,11 @@ async def run(port: int) -> None:
             assert response["record_count"] == 3
             assert "synthetic event" in response["data"]
             assert gateway.sequence_gaps == 1
+            metadata = response["metadata"]
+            assert metadata["max_records"] == 12
+            assert metadata["stop_reason"] == "manual"
+            assert metadata["sequence_gaps_between_received_frames"] == 1
+            assert metadata["markers"][0]["previous_received_frame"]["sequence"] == 2
             assert await hass.config_entries.async_unload(entry.entry_id)
             await hass.async_block_till_done()
             state = hass.states.get(connectivity)

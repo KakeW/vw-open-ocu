@@ -6,6 +6,8 @@ Both topics use QoS 0 and nonretained messages. The firmware sends a status upda
 
 The JSON status message includes integer `version` (1), `session` (16 lowercase hex digits identifying this boot), boolean `capture_mode`, and unsigned counters `queue_depth`, `queue_capacity`, `queue_peak`, `queue_dropped`, `transport_dropped`, `filtered`, `unsupported_dlc`, `driver_missed`, `driver_overrun`, `bus_errors`, `rx_errors`, and `controller_state`. Driver fields mirror ESP-IDF TWAI status. Queue peak is a sampled high-water mark. Gateway counters are cumulative since boot except for queue depth and the controller's current error/state fields.
 
+New firmware adds two optional v1 heartbeat fields. `connection_epoch` is an unsigned counter that changes on Wi-Fi loss and MQTT connection transitions. Treat a changed value as a discontinuity. `last_published_sequence` is the last sequence in a batch whose local QoS 0 publish call succeeded, or JSON null before the first such batch. Local success does not confirm broker delivery. Older v1 heartbeats remain readable and lack these checks.
+
 Binary batches contain ASCII `OCU` and byte `01`, then an eight-byte session ID in big-endian order. One to 48 frame records follow, with no padding:
 
 | Field | Bytes | Meaning |
@@ -19,3 +21,9 @@ Binary batches contain ASCII `OCU` and byte `01`, then an eight-byte session ID 
 Integers are big-endian. Timestamps measure software dequeue with microsecond resolution, so queueing affects timing accuracy. Unsupported DLCs are counted separately and discarded. Driver misses happen before sequence assignment. Home Assistant counts gaps between accepted frames, including loss it observes across reconnects within the same boot. Gaps and gateway counters overlap and must not be summed. QoS 0 can lose the last batch before a disconnect without a subsequent sequence to expose the loss. On reconnect the firmware discards queued data before resuming.
 
 The gateway subscribes to no MQTT topics. Home Assistant capture controls operate on local memory. There is no CAN transmit or wake endpoint.
+
+## Capture integrity
+
+Home Assistant appends accepted frames in sequence order, rejects duplicate or decreasing positions, and retains sequence as the tie-breaker when timestamps match. CSV exports retain microseconds and sequence numbers. The export response adds `metadata` with capture endpoints, stop reason, in-window sequence gaps, rejected-message counts, and the start and end heartbeat snapshots. The recorder stops on a gateway reboot, a reported connection epoch change, an HA MQTT disconnect, or heartbeat expiry. A status snapshot and the frame stream use separate MQTT topics, so there is no shared end-of-capture barrier.
+
+Gateway loss-counter deltas describe the interval between the two heartbeat samples. It can include traffic just before the capture and omit traffic after the last sample. The export uses null if the samples are the same, or for an individual counter that moved backwards. A positive `end_heartbeat_publish_ahead_by` means the end heartbeat reports a sequence beyond the last received capture frame. That difference is a diagnostic hint, since late delivery, skipped sequences and sampling boundaries can contribute. Zero cannot rule out loss after the last sample. See the [vehicle capture workflow](vehicle-capture.md) for run acceptance checks.

@@ -50,8 +50,16 @@ async def async_setup_entry(hass, entry) -> bool:
 
     @callback
     def freshness_tick(now):
+        gateway.check_freshness()
         coordinator.async_set_updated_data(gateway)
 
+    @callback
+    def mqtt_connection_changed(connected):
+        if not connected:
+            gateway.broker_disconnected()
+            coordinator.async_set_updated_data(gateway)
+
+    entry.async_on_unload(mqtt.async_subscribe_connection_status(hass, mqtt_connection_changed))
     entry.async_on_unload(await mqtt.async_subscribe(
         hass, f"{prefix}/status", status_message, qos=0, encoding=None
     ))

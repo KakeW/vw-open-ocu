@@ -7,6 +7,15 @@ capture_start:
       required: true
       selector:
         text:
+    max_records:
+      name: Maximum records
+      description: Maximum number of frames and markers to keep in memory.
+      default: 10000
+      selector:
+        number:
+          min: 1
+          max: 100000
+          mode: box
 capture_stop:
   name: Stop capture
   description: Stop recording and keep the capture in memory for export.

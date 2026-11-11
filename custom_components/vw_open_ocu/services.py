@@ -7,7 +7,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.service import async_register_admin_service
 
 from . import DOMAIN
-from .runtime import Gateway
+from .runtime import CAPTURE_LIMIT, MAX_CAPTURE_LIMIT, Gateway
 
 
 def register(hass) -> None:
@@ -19,12 +19,14 @@ def register(hass) -> None:
 
     async def start(call: ServiceCall) -> None:
         try:
-            gateway(call).start_capture()
+            gateway(call).start_capture(call.data["max_records"])
         except ValueError as exc:
             raise HomeAssistantError(str(exc)) from exc
 
     async def stop(call: ServiceCall) -> None:
-        gateway(call).recording = False
+        state = gateway(call)
+        state.check_freshness()
+        state.stop_capture()
 
     async def mark(call: ServiceCall) -> None:
         try:
@@ -39,12 +41,17 @@ def register(hass) -> None:
                 "data": state.export(call.data["format"]),
                 "discarded": state.capture_discarded,
                 "record_count": len(state.records),
+                "metadata": state.capture_metadata(),
             }
         except ValueError as exc:
             raise HomeAssistantError(str(exc)) from exc
 
     required = {vol.Required("gateway_id"): str}
-    async_register_admin_service(hass, DOMAIN, "capture_start", start, vol.Schema(required))
+    async_register_admin_service(
+        hass, DOMAIN, "capture_start", start,
+        vol.Schema({**required, vol.Optional("max_records", default=CAPTURE_LIMIT):
+                    vol.All(int, vol.Range(min=1, max=MAX_CAPTURE_LIMIT))}),
+    )
     async_register_admin_service(hass, DOMAIN, "capture_stop", stop, vol.Schema(required))
     async_register_admin_service(
         hass, DOMAIN, "capture_mark", mark,

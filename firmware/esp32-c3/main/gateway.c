@@ -139,18 +139,24 @@ static void discard_queued(void)
     }
 }
 
-static bool heartbeat(esp_mqtt_client_handle_t client, uint64_t session)
+static bool heartbeat(esp_mqtt_client_handle_t client, uint64_t session,
+                      unsigned epoch, const uint64_t *last_published_sequence)
 {
     twai_status_info_t info;
     ESP_ERROR_CHECK(twai_get_status_info(&info));
     char payload[512];
+    char published[21] = "null";
+    if (last_published_sequence != NULL) {
+        snprintf(published, sizeof(published), "%" PRIu64, *last_published_sequence);
+    }
     int length = snprintf(payload, sizeof(payload),
         "{\"version\":1,\"session\":\"%016" PRIx64 "\",\"capture_mode\":%s,"
+        "\"connection_epoch\":%u,\"last_published_sequence\":%s,"
         "\"queue_depth\":%u,\"queue_capacity\":%u,\"queue_peak\":%u,"
         "\"queue_dropped\":%u,\"transport_dropped\":%u,\"filtered\":%u,"
         "\"unsupported_dlc\":%u,\"driver_missed\":%" PRIu32 ",\"driver_overrun\":%" PRIu32 ","
         "\"bus_errors\":%" PRIu32 ",\"rx_errors\":%" PRIu32 ",\"controller_state\":%d}",
-        session, OCU_CAPTURE_MODE ? "true" : "false",
+        session, OCU_CAPTURE_MODE ? "true" : "false", epoch, published,
         (unsigned)uxQueueMessagesWaiting(frames), QUEUE_DEPTH, atomic_load(&queue_peak),
         atomic_load(&dropped_queue), atomic_load(&dropped_transport), atomic_load(&filtered),
         atomic_load(&unsupported_dlc), info.rx_missed_count, info.rx_overrun_count,
@@ -168,6 +174,8 @@ static void publish_frames(void *argument)
     put_be(batch + 4, session, 8);
     int64_t next_heartbeat = 0;
     unsigned epoch = 0;
+    uint64_t last_published_sequence = 0;
+    bool published_frames = false;
 
     for (;;) {
         unsigned current_epoch = atomic_load(&connection_epoch);
@@ -184,7 +192,8 @@ static void publish_frames(void *argument)
         }
         int64_t now = esp_timer_get_time();
         if (now >= next_heartbeat) {
-            if (!heartbeat(client, session)) {
+            if (!heartbeat(client, session, epoch,
+                           published_frames ? &last_published_sequence : NULL)) {
                 discard_queued();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
@@ -200,16 +209,23 @@ static void publish_frames(void *argument)
             continue;
         }
         end = encode_frame(end, &frame);
+        uint64_t batch_last_sequence = frame.sequence;
         ++count;
-        vTaskDelay(pdMS_TO_TICKS(10));
+        if (uxQueueMessagesWaiting(frames) < BATCH_MAX - 1) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
         while (count < BATCH_MAX && xQueueReceive(frames, &frame, 0) == pdTRUE) {
             end = encode_frame(end, &frame);
+            batch_last_sequence = frame.sequence;
             ++count;
         }
         if (epoch != atomic_load(&connection_epoch) ||
             esp_mqtt_client_publish(client, "vw_open_ocu/" OCU_GATEWAY_ID "/v1/frames",
                                     (const char *)batch, end - batch, 0, 0) < 0) {
             atomic_fetch_add(&dropped_transport, count);
+        } else {
+            last_published_sequence = batch_last_sequence;
+            published_frames = true;
         }
     }
 }
