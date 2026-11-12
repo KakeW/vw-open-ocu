@@ -48,6 +48,26 @@ def _broker_uri(value):
     return value
 
 
+def _mqtt_credential(value):
+    value = cv.string_strict(value)
+    if "\x00" in value or len(value.encode("utf-8")) > 65535:
+        raise cv.Invalid("MQTT credentials must fit a 16-bit length field and contain no NUL")
+    return value
+
+
+def _ca_certificate(value):
+    value = cv.string_strict(value)
+    pem = value.strip()
+    if (
+        "\x00" in value
+        or not pem.startswith("-----BEGIN CERTIFICATE-----")
+        or not pem.endswith("-----END CERTIFICATE-----")
+        or "PRIVATE KEY-----" in value
+    ):
+        raise cv.Invalid("Use a PEM certificate or certificate chain for broker trust")
+    return value
+
+
 def _gateway_id(value):
     value = cv.string_strict(value)
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", value):
@@ -74,9 +94,9 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(): cv.declare_id(Gateway),
             cv.Required("gateway_id"): _gateway_id,
             cv.Required("broker_uri"): cv.sensitive(_broker_uri),
-            cv.Required(CONF_USERNAME): cv.sensitive(cv.string_strict),
-            cv.Required(CONF_PASSWORD): cv.sensitive(cv.string_strict),
-            cv.Optional("ca_certificate"): cv.sensitive(cv.string_strict),
+            cv.Required(CONF_USERNAME): cv.sensitive(_mqtt_credential),
+            cv.Required(CONF_PASSWORD): cv.sensitive(_mqtt_credential),
+            cv.Optional("ca_certificate"): cv.sensitive(_ca_certificate),
             **{
                 cv.Optional(key): schema(entity_category="diagnostic")
                 for key, (schema, _) in DIAGNOSTICS.items()

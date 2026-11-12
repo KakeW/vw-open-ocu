@@ -55,6 +55,12 @@ class Gateway final : public Component, public ota::OTAGlobalStateListener {
     NONE, SETUP, INIT, EVENT_REGISTRATION, START, STOP, TRANSPORT, TLS, AUTH, REFUSED,
     UNKNOWN_MQTT, CONTROLLER, HEARTBEAT_ENCODING, HEARTBEAT_PUBLISH,
   };
+  struct HeapStats {
+    size_t free{0};
+    size_t largest{0};
+    size_t internal_free{0};
+    size_t internal_largest{0};
+  };
   struct MqttError {
     ErrorKind kind{ErrorKind::NONE};
     int code{0};
@@ -62,6 +68,7 @@ class Gateway final : public Component, public ota::OTAGlobalStateListener {
     unsigned verify_flags{0};
     int socket_errno{0};
     unsigned serial{0};
+    HeapStats init_heap{};
   };
   struct LogGate {
     uint32_t at{0};
@@ -82,6 +89,7 @@ class Gateway final : public Component, public ota::OTAGlobalStateListener {
   void publish_();
   void discard_queued_();
   void mqtt_event_(int32_t event, const esp_mqtt_event_t *data);
+  static HeapStats read_heap_();
   void record_error_(MqttError error);
   void report_diagnostics_();
   static const char *wifi_label_(WifiState state);

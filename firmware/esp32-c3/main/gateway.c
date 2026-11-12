@@ -310,8 +310,8 @@ void app_main(void)
     }
 
     const esp_mqtt_client_config_t mqtt = {
+        // The mqtts:// URI selects TLS. ESP-MQTT rejects a second transport selector.
         .broker.address.uri = OCU_MQTT_URI,
-        .broker.address.transport = MQTT_TRANSPORT_OVER_SSL,
         .broker.verification.certificate = OCU_MQTT_CA_PEM,
         .broker.verification.crt_bundle_attach = OCU_MQTT_CA_PEM ? NULL : esp_crt_bundle_attach,
         .credentials.username = OCU_MQTT_USERNAME,

@@ -1,4 +1,5 @@
 #include "vw_open_ocu.h"
+#include "mqtt_config.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -9,6 +10,7 @@
 #include "driver/gpio.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_rom_gpio.h"
@@ -269,7 +271,11 @@ void Gateway::format_error_(const MqttError &error, char *text, size_t size) {
                     static_cast<unsigned>(error.code), error.tls_stack, error.verify_flags, error.socket_errno);
       return;
     case ErrorKind::SETUP: label = "Gateway setup failed"; break;
-    case ErrorKind::INIT: label = "MQTT client initialization failed"; break;
+    case ErrorKind::INIT:
+      std::snprintf(text, size, "MQTT init returned null: heap free=%zu largest=%zu internal free=%zu largest=%zu",
+                    error.init_heap.free, error.init_heap.largest, error.init_heap.internal_free,
+                    error.init_heap.internal_largest);
+      return;
     case ErrorKind::EVENT_REGISTRATION: label = "MQTT event registration failed"; break;
     case ErrorKind::START: label = "MQTT client start failed"; break;
     case ErrorKind::STOP: label = "MQTT client stop failed"; break;
@@ -281,6 +287,12 @@ void Gateway::format_error_(const MqttError &error, char *text, size_t size) {
     case ErrorKind::HEARTBEAT_PUBLISH: label = "Heartbeat local publish failed"; break;
   }
   std::snprintf(text, size, "%s (code=%d)", label, error.code);
+}
+
+Gateway::HeapStats Gateway::read_heap_() {
+  constexpr auto internal = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+  return {heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+          heap_caps_get_free_size(internal), heap_caps_get_largest_free_block(internal)};
 }
 
 void Gateway::record_error_(MqttError error) {
@@ -413,22 +425,27 @@ bool Gateway::heartbeat_(esp_mqtt_client_handle_t client, uint64_t session, unsi
 }
 
 void Gateway::publish_() {
-  esp_mqtt_client_config_t config{};
-  config.broker.address.uri = this->uri_.c_str();
-  config.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
-  config.broker.verification.certificate = this->ca_.empty() ? nullptr : this->ca_.c_str();
-  config.broker.verification.crt_bundle_attach = this->ca_.empty() ? esp_crt_bundle_attach : nullptr;
-  config.credentials.username = this->username_.c_str();
-  config.credentials.authentication.password = this->password_.c_str();
-  config.credentials.client_id = this->client_id_.c_str();
-  config.network.timeout_ms = 2000;
-  config.task.priority = 4;
+  const auto config = make_mqtt_config<esp_mqtt_client_config_t>(
+      this->uri_.c_str(), this->username_.c_str(), this->password_.c_str(), this->client_id_.c_str(),
+      this->ca_.empty() ? nullptr : this->ca_.c_str(), esp_crt_bundle_attach);
   esp_mqtt_client_handle_t client = nullptr;
-  const auto start_client = [this, &config, &client]() {
+  bool reported_init = false;
+  const auto start_client = [this, &config, &client, &reported_init]() {
     if (client == nullptr) {
+      const auto heap = read_heap_();
+      if (!reported_init) {
+        ESP_LOGI(TAG, "MQTT init: mqtts URI bytes=%zu username bytes=%zu password bytes=%zu client ID bytes=%zu "
+                      "CA bytes=%zu task priority=%d; heap free=%zu largest=%zu internal free=%zu largest=%zu",
+                 this->uri_.size(), this->username_.size(), this->password_.size(), this->client_id_.size(),
+                 this->ca_.size(), config.task.priority, heap.free, heap.largest, heap.internal_free,
+                 heap.internal_largest);
+        reported_init = true;
+      }
       client = esp_mqtt_client_init(&config);
       if (client == nullptr) {
-        this->record_error_({ErrorKind::INIT});
+        MqttError error{ErrorKind::INIT};
+        error.init_heap = heap;
+        this->record_error_(error);
         return false;
       }
       const auto result = esp_mqtt_client_register_event(

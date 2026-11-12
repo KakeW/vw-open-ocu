@@ -25,6 +25,19 @@ The example YAML enables optional gateway diagnostic entities under `vw_open_ocu
 
 The logs are rate-limited and report stage, event counts, and numeric errors. The error entity keeps the latest failure even after a successful reconnect. Counters reset when the ESP32 reboots. Logs omit broker credentials, CA contents, and frame payloads. TLS certificate and broker identity verification stay enabled. [ESP-MQTT error fields](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32c3/api-reference/protocols/mqtt.html)
 
+### MQTT initialization returns null
+
+ESP-IDF 5.5.5's `esp_mqtt_client_init` can return null from four places:
+
+- Allocation of the client object fails.
+- `create_client_data` fails to allocate the error record, recursive mutex, outbox, or event group.
+- `esp_mqtt_set_config` fails while allocating its configuration, I/O buffers, or copies of strings and optional fields, parsing the URI, selecting an unsupported MQTT protocol, or checking for conflicting settings.
+- Allocation of MQTT 5 default properties fails when MQTT 5 support is compiled in. The example build uses MQTT 3.1.1. The initializer also calls `esp_event_loop_create` without checking its return value. Event registration is checked separately by the gateway.
+
+The original gateway supplied both an `mqtts://` URI and an explicit SSL transport. ESP-MQTT's conflict check returns `ESP_ERR_INVALID_ARG` for that combination. The URI alone selects TLS, including verification of the broker identity. A null return happens before the MQTT task starts or connects. The SDK parses the CA at TLS setup, and allocates the MQTT task stack in `esp_mqtt_client_start`. A broker handshake or a task stack allocation failure therefore belongs to a later stage. [Exact ESP-MQTT source bundled with ESP-IDF 5.5.5](https://github.com/espressif/esp-mqtt/blob/0e9ec171b448db2101ea537300976b7ffe595941/mqtt_client.c)
+
+The first attempt logs the configured field lengths and heap snapshot. On a null result, **Last MQTT Error** and the rate-limited gateway log include free 8-bit heap, largest contiguous 8-bit block, free internal 8-bit heap, and largest contiguous internal 8-bit block, measured immediately before the attempt. The SDK returns no error code from this API. Set `esp32.framework.log_level: WARN` to see its warning and error messages in Device Builder's wireless logs. The example uses that setting and leaves serial application logging disabled. Keep credentials in separate YAML secrets. The CA field accepts NUL-terminated PEM via the component's stored string and remains available to ESP-MQTT for the client's lifetime.
+
 ## What happens during an update
 
 The component subscribes to ESPHome's OTA lifecycle. On upload start it signals the receive task to stop TWAI and the network worker to stop its MQTT client and discard queued frames. These operations run outside ESPHome's main loop. On upload error or abort, the tasks resume with a new connection epoch. A successful update keeps capture paused until reboot. MQTT continuity changes end an active HA recording. Stop and export important captures before updating. [ESPHome OTA lifecycle](https://esphome.io/components/ota/)

@@ -11,6 +11,7 @@ esp32:
   framework:
     type: esp-idf
     version: 5.5.5
+    log_level: WARN  # Forward ESP-IDF MQTT/transport warnings and errors to ESPHome logs.
 
 # Device Builder: copy the repository's components/vw_open_ocu directory
 # to components/vw_open_ocu beside this device YAML. See docs/esphome.md.

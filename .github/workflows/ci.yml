@@ -11,11 +11,13 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m unittest discover -s tests -v
-      - name: Test the MQTT worker lifecycle
+      - name: Test MQTT configuration and lifecycle
         run: |
-          c++ -std=c++17 -Wall -Wextra -Werror -Icomponents/vw_open_ocu \
-            tests/test_mqtt_lifecycle.cpp -o "$RUNNER_TEMP/ocu-mqtt-lifecycle"
-          "$RUNNER_TEMP/ocu-mqtt-lifecycle"
+          for test in tests/test_mqtt_config.cpp tests/test_mqtt_lifecycle.cpp; do
+            c++ -std=c++17 -Wall -Wextra -Werror -Icomponents/vw_open_ocu \
+              "$test" -o "$RUNNER_TEMP/ocu-mqtt-test"
+            "$RUNNER_TEMP/ocu-mqtt-test"
+          done
   firmware:
     runs-on: ubuntu-latest
     container: espressif/idf:v5.5.2
